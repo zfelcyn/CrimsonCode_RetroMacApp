@@ -212,21 +212,27 @@ static void draw_board_ui(const AppState *s)
 {
     erase();
 
-    mvprintw(0, 0, "Connect 4 (ncurses) | \u2190/\u2192 move | Space/Enter drop | r restart | q quit");
+    // 1) Fix header: remove unicode arrows
+    mvprintw(0, 0, "Connect 4 (ncurses) | LEFT/RIGHT move | Space/Enter drop | r restart | q quit");
     mvprintw(1, 0, "You = O   AI = X");
 
-    // Column numbers
     int top = 3;
-    mvprintw(top, 0, "   0 1 2 3 4 5 6");
 
-    // Selector row
+    // 2) Column numbers aligned to same spacing as cells (" %c" => 2 chars each)
+    mvprintw(top, 0, "   "); // left padding to match row labels like "0 |"
+    for (int c = 0; c < BOARD_COLS; ++c)
+    {
+        printw(" %d", c);
+    }
+
+    // Selector row aligned under the columns
     mvprintw(top + 1, 0, "   ");
     for (int c = 0; c < BOARD_COLS; ++c)
     {
         if (c == s->cursor_col)
         {
             attron(A_REVERSE);
-            printw("^ ");
+            printw(" ^");
             attroff(A_REVERSE);
         }
         else
