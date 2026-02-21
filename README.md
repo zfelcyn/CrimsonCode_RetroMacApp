@@ -62,11 +62,13 @@ Notes:
 
 This code uses classic Toolbox/QuickDraw APIs, so a native run on current macOS requires a port (Cocoa, SDL2, or another modern graphics layer).
 
-## Included modern-mac runner (non-invasive)
+## Included modern-mac game (non-invasive)
 
-To keep the original CodeWarrior project untouched, this repo now includes a separate terminal-based modern clone:
+To keep the original CodeWarrior project untouched, this repo includes a separate terminal game:
 
-- `modern/sillyballs_modern.c`
+- `modern/connect-four-virus.c` (UI + main)
+- `modern/connect_four.c` / `modern/connect_four.h` (board rules)
+- `modern/connect_four_ai.c` / `modern/connect_four_ai.h` (minimax AI)
 - `Makefile`
 
 Build and run:
@@ -76,4 +78,19 @@ make
 make run
 ```
 
-This produces only `build-modern/sillyballs_modern` and does not overwrite any classic Mac files.
+Binary output:
+
+- `build-modern/connect-four-virus`
+
+Controls:
+
+- Left/Right (or `A`/`D`) to choose a column
+- `Enter` or `Space` to drop
+- `1`-`6` to jump-select columns
+- `q` to quit, `r` to restart after game over
+
+Gameplay note:
+
+- When AI wins, a random `1`-`6` "victory tax" prompt appears (text/effects only, no external side effects).
+
+This modern build path does not overwrite any classic Mac files.
