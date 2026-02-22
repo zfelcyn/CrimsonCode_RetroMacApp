@@ -88,7 +88,7 @@ Controls:
 - `Enter` or `Space` to drop
 - `1`-`6` to jump-select columns
 - `q` to quit, `r` to restart after game over
-- After game over, a new round auto-starts after ~5 seconds (you can still press `r` immediately).
+- After game over, a new round auto-starts after ~3 seconds with a reboot animation (you can still press `r` immediately).
 
 Gameplay note:
 
@@ -101,5 +101,9 @@ Gameplay note:
 - At higher compromise levels, punishments can hijack input (`"Virus moved you haha!"`), flip the grid for a turn, and force temporary purple takeover visuals.
 - Greeting adapts with infection state (`Hello Player` -> `Hello Loser` at high compromise).
 - Startup now includes a fake classic desktop sequence: enter your name, then open `SUSPICIOUS.EXE` to launch containment mode.
+- Occasionally between rounds, a random intermission mini-game appears.
+- `Bitcoin Miner`: mash space to mine enough hashes before timeout.
+- `Phishing Detector`: classify messages as phishing vs safe.
+- Outcomes can slightly reduce or increase compromise.
 
 This modern build path does not overwrite any classic Mac files.

@@ -14,7 +14,10 @@ enum {
     VM_LOG_LINES = 8,
     VM_LOG_CHARS = 100,
     LOSS_MSG_CHARS = 96,
-    INCIDENT_TYPES = 6
+    INCIDENT_TYPES = 6,
+    AUTO_RESTART_SECONDS = 3,
+    MINING_ROUND_SECONDS = 6,
+    PHISHING_QUESTIONS = 3
 };
 
 enum {
@@ -524,7 +527,208 @@ static void board_clear(AppState *s) {
 
 static void arm_auto_restart(AppState *s) {
     s->auto_restart_pending = true;
-    s->auto_restart_deadline = time(NULL) + 5;
+    s->auto_restart_deadline = time(NULL) + AUTO_RESTART_SECONDS;
+}
+
+static void run_mining_minigame(AppState *s) {
+    int hashes = 0;
+    int target = 22 + s->compromised_pct / 8;
+    time_t end_time = time(NULL) + MINING_ROUND_SECONDS;
+    int frame = 0;
+    const char spinner[4] = {'|', '/', '-', '\\'};
+
+    flushinp();
+
+    while (time(NULL) < end_time) {
+        int remaining = (int)(end_time - time(NULL));
+        int ch = getch();
+        int filled = clamp_int((hashes * 24) / target, 0, 24);
+        char bar[25];
+
+        for (int i = 0; i < 24; ++i) {
+            bar[i] = (i < filled) ? '#' : '.';
+        }
+        bar[24] = '\0';
+
+        erase();
+        if (has_colors()) {
+            attron(A_BOLD | COLOR_PAIR(6));
+        } else {
+            attron(A_BOLD);
+        }
+        mvprintw(1, 2, "INTERMISSION MINI-GAME: BITCOIN MINER 0.9");
+        if (has_colors()) {
+            attroff(A_BOLD | COLOR_PAIR(6));
+        } else {
+            attroff(A_BOLD);
+        }
+
+        mvprintw(3, 2, "Mash SPACE to mine blocks before timeout.");
+        mvprintw(4, 2, "Compromised systems need more hashes. Build: [%c]", spinner[frame % 4]);
+        mvprintw(6, 2, "Progress [%s]  %d / %d hashes", bar, hashes, target);
+        mvprintw(7, 2, "Time left: %d sec", remaining);
+        mvprintw(9, 2, "Press SPACE repeatedly. Press any other key to keep going.");
+        refresh();
+
+        if (ch == ' ') {
+            hashes += 1 + (rand() % 2);
+            if ((rand() % 100) < 12) {
+                beep();
+            }
+        }
+
+        if ((rand() % 100) < 4) {
+            hashes += 1;
+        }
+
+        if (hashes >= target) {
+            break;
+        }
+
+        frame += 1;
+        usleep(50000);
+    }
+
+    if (hashes >= target) {
+        int before = s->compromised_pct;
+        s->compromised_pct = clamp_int(s->compromised_pct - 4, 0, 100);
+        sync_compromised_floor(s);
+        vm_add_log(s, "[MINIGAME] Mining success. Compromised %d%% -> %d%%.", before, s->compromised_pct);
+        mvprintw(11, 2, "Success: mined enough blocks. System patched slightly.");
+    } else {
+        int before = s->compromised_pct;
+        s->compromised_pct = clamp_int(s->compromised_pct + 3, 0, 100);
+        vm_add_log(s, "[MINIGAME] Mining failed. Compromised %d%% -> %d%%.", before, s->compromised_pct);
+        mvprintw(11, 2, "Failure: miner overheated. Malware slipped in.");
+    }
+
+    refresh();
+    usleep(1200000);
+}
+
+typedef struct {
+    const char *message;
+    bool phishing;
+} PhishingPrompt;
+
+static void run_phishing_minigame(AppState *s) {
+    static const PhishingPrompt kPrompts[] = {
+        {"'Verify Apple ID now or account deleted in 5 min' from appl3-secure.example", true},
+        {"'Coffee run at 3 PM?' from your teammate", false},
+        {"'Payroll requires your password to release salary' from hr-payfast.biz", true},
+        {"'Meeting moved to tomorrow, same room' from manager", false},
+        {"'Download urgent security patch from random .zip link' from it-support@fake", true},
+        {"'Shared project notes, internal wiki link' from coworker", false}
+    };
+
+    int score = 0;
+    int total = PHISHING_QUESTIONS;
+
+    flushinp();
+
+    for (int q = 0; q < total; ++q) {
+        int idx = rand() % (int)(sizeof(kPrompts) / sizeof(kPrompts[0]));
+        int choice = -1;
+        time_t end_time = time(NULL) + 8;
+
+        while (time(NULL) < end_time && choice < 0) {
+            int remaining = (int)(end_time - time(NULL));
+            int ch = getch();
+
+            erase();
+            if (has_colors()) {
+                attron(A_BOLD | COLOR_PAIR(2));
+            } else {
+                attron(A_BOLD);
+            }
+            mvprintw(1, 2, "INTERMISSION MINI-GAME: PHISHING DETECTOR");
+            if (has_colors()) {
+                attroff(A_BOLD | COLOR_PAIR(2));
+            } else {
+                attroff(A_BOLD);
+            }
+
+            mvprintw(3, 2, "Question %d/%d", q + 1, total);
+            mvprintw(5, 2, "%s", kPrompts[idx].message);
+            mvprintw(7, 2, "Press P = phishing, S = safe");
+            mvprintw(8, 2, "Time left: %d sec", remaining);
+            refresh();
+
+            if (ch == 'p' || ch == 'P') {
+                choice = 1;
+            } else if (ch == 's' || ch == 'S') {
+                choice = 0;
+            }
+
+            usleep(45000);
+        }
+
+        bool correct = false;
+        if (choice >= 0) {
+            bool guessed_phishing = (choice == 1);
+            correct = (guessed_phishing == kPrompts[idx].phishing);
+        }
+
+        erase();
+        if (correct) {
+            score += 1;
+            mvprintw(5, 2, "Correct.");
+            beep();
+        } else {
+            mvprintw(5, 2, "Wrong. That one fooled you.");
+        }
+        refresh();
+        usleep(700000);
+    }
+
+    if (score >= 2) {
+        int before = s->compromised_pct;
+        s->compromised_pct = clamp_int(s->compromised_pct - 3, 0, 100);
+        sync_compromised_floor(s);
+        vm_add_log(s, "[MINIGAME] Phishing drill passed (%d/%d). %d%% -> %d%%.", score, total, before, s->compromised_pct);
+        erase();
+        mvprintw(5, 2, "Drill passed. You avoided most phish.");
+    } else {
+        int before = s->compromised_pct;
+        s->compromised_pct = clamp_int(s->compromised_pct + 3, 0, 100);
+        vm_add_log(s, "[MINIGAME] Phishing drill failed (%d/%d). %d%% -> %d%%.", score, total, before, s->compromised_pct);
+        erase();
+        mvprintw(5, 2, "Drill failed. Several links were clicked.");
+    }
+    refresh();
+    usleep(1200000);
+}
+
+static void maybe_run_intermission_minigame(AppState *s) {
+    int chance = clamp_int(25 + s->compromised_pct / 2, 20, 78);
+
+    if ((rand() % 100) >= chance) {
+        return;
+    }
+
+    vm_add_log(s, "[INTERMISSION] Random mini-game launched.");
+
+    if (rand() % 2 == 0) {
+        run_mining_minigame(s);
+    } else {
+        run_phishing_minigame(s);
+    }
+
+    flushinp();
+}
+
+static void process_auto_restart(AppState *s) {
+    if (!s->game_over || !s->auto_restart_pending) {
+        return;
+    }
+
+    if (time(NULL) < s->auto_restart_deadline) {
+        return;
+    }
+
+    s->auto_restart_pending = false;
+    maybe_run_intermission_minigame(s);
+    board_clear(s);
 }
 
 static void reduce_infection_after_player_win(AppState *s) {
@@ -1042,6 +1246,10 @@ static void draw_board_ui(const AppState *s) {
 
     if (s->game_over) {
         int countdown = 0;
+        const char spinner[4] = {'|', '/', '-', '\\'};
+        int filled = 0;
+        char reboot_bar[17];
+
         if (has_colors()) {
             attron(A_BOLD | COLOR_PAIR(4));
         } else {
@@ -1055,6 +1263,12 @@ static void draw_board_ui(const AppState *s) {
             }
         }
 
+        filled = clamp_int((AUTO_RESTART_SECONDS - countdown) * 5, 0, 15);
+        for (int i = 0; i < 15; ++i) {
+            reboot_bar[i] = (i < filled) ? '#' : '.';
+        }
+        reboot_bar[15] = '\0';
+
         if (s->winner == 1) {
             mvprintw(info_row, 0, "You win. Auto restart in %d sec. Press r now or q to quit.", countdown);
         } else if (s->winner == 2) {
@@ -1062,6 +1276,8 @@ static void draw_board_ui(const AppState *s) {
         } else {
             mvprintw(info_row, 0, "Draw. Auto restart in %d sec. Press r now or q to quit.", countdown);
         }
+        mvprintw(info_row + 1, 0, "Reboot animation [%s] %c", reboot_bar, spinner[s->vm_ticks % 4]);
+        info_row += 1;
 
         if (has_colors()) {
             attroff(A_BOLD | COLOR_PAIR(4));
@@ -1292,9 +1508,7 @@ int main(void) {
 
         ch = getch();
         if (ch == ERR) {
-            if (s.game_over && s.auto_restart_pending && time(NULL) >= s.auto_restart_deadline) {
-                board_clear(&s);
-            }
+            process_auto_restart(&s);
             usleep(12000);
             continue;
         }
@@ -1309,9 +1523,7 @@ int main(void) {
         }
 
         if (s.game_over) {
-            if (s.auto_restart_pending && time(NULL) >= s.auto_restart_deadline) {
-                board_clear(&s);
-            }
+            process_auto_restart(&s);
             continue;
         }
 
