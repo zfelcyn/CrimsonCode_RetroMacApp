@@ -65,7 +65,16 @@ typedef struct {
     int active_flip_turns_remaining;
     int active_purple_turns_remaining;
     char effect_summary[220];
+
+    char player_name[32];
+    bool intro_completed;
+    int desktop_selected_icon;
+
+    bool auto_restart_pending;
+    time_t auto_restart_deadline;
 } AppState;
+
+static void arm_auto_restart(AppState *s);
 
 static unsigned int make_seed(void) {
     return (unsigned int)time(NULL) ^ (unsigned int)getpid();
@@ -143,11 +152,19 @@ static void sync_compromised_floor(AppState *s) {
     s->compromised_pct = clamp_int(s->compromised_pct, 0, 100);
 }
 
-static const char *player_greeting(const AppState *s) {
-    if (s->compromised_pct >= 60) {
-        return "Hello Loser";
+static const char *display_player_name(const AppState *s) {
+    if (s->player_name[0] == '\0') {
+        return "Player";
     }
-    return "Hello Player";
+    return s->player_name;
+}
+
+static void build_player_greeting(const AppState *s, char *buf, size_t cap) {
+    if (s->compromised_pct >= 60) {
+        snprintf(buf, cap, "Hello Loser %s", display_player_name(s));
+    } else {
+        snprintf(buf, cap, "Hello %s", display_player_name(s));
+    }
 }
 
 static void nc_init(AppState *s) {
@@ -449,19 +466,23 @@ static void vm_boot(AppState *s) {
 }
 
 static void board_clear(AppState *s) {
+    char greeting[96];
+
     cf_init(&s->game);
     s->cursor_col = CF_COLS / 2;
     s->game_over = false;
     s->winner = 0;
+    s->auto_restart_pending = false;
     sync_compromised_floor(s);
-    snprintf(s->status, sizeof(s->status), "%s. Your move.", player_greeting(s));
+    build_player_greeting(s, greeting, sizeof(greeting));
+    snprintf(s->status, sizeof(s->status), "%s. Your move.", greeting);
 
     vm_boot(s);
     apply_round_effects(s);
     vm_add_log(
         s,
         "[USER] %s | Record W:%d L:%d | Compromised %d%%",
-        player_greeting(s),
+        greeting,
         s->total_wins,
         s->total_losses,
         s->compromised_pct
@@ -497,7 +518,13 @@ static void board_clear(AppState *s) {
         s->game_over = true;
         s->winner = 0;
         snprintf(s->status, sizeof(s->status), "No playable columns this round.");
+        arm_auto_restart(s);
     }
+}
+
+static void arm_auto_restart(AppState *s) {
+    s->auto_restart_pending = true;
+    s->auto_restart_deadline = time(NULL) + 5;
 }
 
 static void reduce_infection_after_player_win(AppState *s) {
@@ -662,6 +689,177 @@ static void move_cursor_to_next_open(AppState *s, int direction) {
     }
 }
 
+static void trim_player_name(char *name) {
+    size_t len = strlen(name);
+    while (len > 0 && (name[len - 1] == ' ' || name[len - 1] == '\t')) {
+        name[len - 1] = '\0';
+        len -= 1;
+    }
+}
+
+static void draw_fake_desktop(
+    const AppState *s,
+    int selected_icon,
+    const char *hint,
+    const char *message
+) {
+    static const char *icons[3] = {
+        "ReadMe.txt",
+        "Paint",
+        "SUSPICIOUS.EXE"
+    };
+
+    erase();
+    if (has_colors()) {
+        attron(A_BOLD | COLOR_PAIR(6));
+    } else {
+        attron(A_BOLD);
+    }
+    mvprintw(0, 0, "Classic Desktop - Macintosh HD - %s", display_player_name(s));
+    if (has_colors()) {
+        attroff(A_BOLD | COLOR_PAIR(6));
+    } else {
+        attroff(A_BOLD);
+    }
+
+    mvprintw(1, 0, "Use LEFT/RIGHT then Enter to open an icon.");
+
+    mvprintw(3, 2,  "  .-----------------------.");
+    mvprintw(4, 2,  "  | .-------------------. |");
+    mvprintw(5, 2,  "  | | >run#             | |");
+    mvprintw(6, 2,  "  | | _                 | |");
+    mvprintw(7, 2,  "  | | [SUSPICIOUS.EXE]  | |");
+    mvprintw(8, 2,  "  | '-------------------' |");
+    mvprintw(9, 2,  "  |      Finder 9.2       |");
+    mvprintw(10, 2, " .^-----------------------^.");
+    mvprintw(11, 2, " |  ---~   Mac Desktop VM  |");
+    mvprintw(12, 2, " '-------------------------'");
+
+    for (int i = 0; i < 3; ++i) {
+        int x = 2 + i * 22;
+        if (i == selected_icon) {
+            attron(A_REVERSE | A_BOLD);
+        }
+        mvprintw(14, x, "[ %-15s ]", icons[i]);
+        if (i == selected_icon) {
+            attroff(A_REVERSE | A_BOLD);
+        }
+    }
+
+    mvprintw(17, 0, "%s", hint);
+    mvprintw(19, 0, "%s", message);
+    refresh();
+}
+
+static void run_fake_desktop_intro(AppState *s) {
+    char input_name[32] = {0};
+    int selected_icon = 0;
+    char message[160] = {0};
+
+    if (s->intro_completed) {
+        return;
+    }
+
+    nodelay(stdscr, false);
+    keypad(stdscr, true);
+
+    erase();
+    if (has_colors()) {
+        attron(A_BOLD | COLOR_PAIR(3));
+    } else {
+        attron(A_BOLD);
+    }
+    mvprintw(2, 2, "Welcome to Macintosh");
+    if (has_colors()) {
+        attroff(A_BOLD | COLOR_PAIR(3));
+    } else {
+        attroff(A_BOLD);
+    }
+    mvprintw(4, 2, "Booting Fake Mac OS 9 VM...");
+    mvprintw(6, 2, "Loading Finder, extensions, and questionable startup items.");
+    refresh();
+    usleep(700000);
+
+    erase();
+    mvprintw(3, 2, "Please enter your operator name:");
+    mvprintw(5, 2, "> ");
+    echo();
+    curs_set(1);
+    move(5, 4);
+    getnstr(input_name, (int)sizeof(input_name) - 1);
+    noecho();
+    curs_set(0);
+    trim_player_name(input_name);
+
+    if (input_name[0] == '\0') {
+        snprintf(s->player_name, sizeof(s->player_name), "Player");
+    } else {
+        snprintf(s->player_name, sizeof(s->player_name), "%s", input_name);
+    }
+
+    snprintf(message, sizeof(message), "Desktop ready. Choose an icon to open.");
+
+    while (true) {
+        int ch;
+        draw_fake_desktop(
+            s,
+            selected_icon,
+            "Hint: the suspicious executable looks very clickable.",
+            message
+        );
+
+        ch = getch();
+        if (ch == KEY_LEFT || ch == 'a' || ch == 'A') {
+            selected_icon = (selected_icon + 2) % 3;
+            continue;
+        }
+        if (ch == KEY_RIGHT || ch == 'd' || ch == 'D') {
+            selected_icon = (selected_icon + 1) % 3;
+            continue;
+        }
+        if (ch >= '1' && ch <= '3') {
+            selected_icon = ch - '1';
+            continue;
+        }
+
+        if (ch == '\n' || ch == KEY_ENTER || ch == ' ') {
+            if (selected_icon == 0) {
+                snprintf(message, sizeof(message), "ReadMe: \"Never open suspicious EXEs.\"");
+                beep();
+            } else if (selected_icon == 1) {
+                snprintf(message, sizeof(message), "Paint failed to launch: missing QuickDraw extension.");
+            } else {
+                erase();
+                if (has_colors()) {
+                    attron(A_BOLD | COLOR_PAIR(1));
+                } else {
+                    attron(A_BOLD);
+                }
+                mvprintw(4, 2, "Launching SUSPICIOUS.EXE...");
+                if (has_colors()) {
+                    attroff(A_BOLD | COLOR_PAIR(1));
+                } else {
+                    attroff(A_BOLD);
+                }
+                mvprintw(6, 2, "This looked like a normal utility. It was not.");
+                mvprintw(8, 2, "Dropping into containment game mode...");
+                refresh();
+                flash();
+                beep();
+                usleep(850000);
+
+                s->desktop_selected_icon = selected_icon;
+                s->compromised_pct = clamp_int(s->compromised_pct + 8, 0, 100);
+                s->intro_completed = true;
+                break;
+            }
+        }
+    }
+
+    nodelay(stdscr, true);
+    flushinp();
+}
+
 static void draw_vm_console(const AppState *s, int start_y) {
     int uptime_seconds = (int)difftime(time(NULL), s->vm_boot_time);
     int mm = uptime_seconds / 60;
@@ -725,6 +923,9 @@ static void draw_board_ui(const AppState *s) {
     int info_row = grid_y + CF_ROWS + 2;
     bool flipped = is_grid_flipped(s);
     bool purple = is_purple_takeover(s);
+    char greeting[96];
+
+    build_player_greeting(s, greeting, sizeof(greeting));
 
     erase();
 
@@ -733,7 +934,7 @@ static void draw_board_ui(const AppState *s) {
     } else {
         attron(A_BOLD);
     }
-    mvprintw(0, 0, "%s :: Connect Four Virus :: Fake Mac OS 9 VM", player_greeting(s));
+    mvprintw(0, 0, "%s :: Connect Four Virus :: Fake Mac OS 9 VM", greeting);
     if (has_colors()) {
         attroff(A_BOLD | COLOR_PAIR(3));
     } else {
@@ -840,18 +1041,26 @@ static void draw_board_ui(const AppState *s) {
     }
 
     if (s->game_over) {
+        int countdown = 0;
         if (has_colors()) {
             attron(A_BOLD | COLOR_PAIR(4));
         } else {
             attron(A_BOLD);
         }
 
+        if (s->auto_restart_pending) {
+            countdown = (int)(s->auto_restart_deadline - time(NULL));
+            if (countdown < 0) {
+                countdown = 0;
+            }
+        }
+
         if (s->winner == 1) {
-            mvprintw(info_row, 0, "You win. Press r to play again or q to quit.");
+            mvprintw(info_row, 0, "You win. Auto restart in %d sec. Press r now or q to quit.", countdown);
         } else if (s->winner == 2) {
-            mvprintw(info_row, 0, "AI wins. Press r to play again or q to quit.");
+            mvprintw(info_row, 0, "AI wins. Auto restart in %d sec. Press r now or q to quit.", countdown);
         } else {
-            mvprintw(info_row, 0, "Draw. Press r to play again or q to quit.");
+            mvprintw(info_row, 0, "Draw. Auto restart in %d sec. Press r now or q to quit.", countdown);
         }
 
         if (has_colors()) {
@@ -1071,6 +1280,7 @@ int main(void) {
 
     nc_init(&s);
     app_update_dimensions(&s);
+    run_fake_desktop_intro(&s);
     board_clear(&s);
 
     while (true) {
@@ -1082,6 +1292,9 @@ int main(void) {
 
         ch = getch();
         if (ch == ERR) {
+            if (s.game_over && s.auto_restart_pending && time(NULL) >= s.auto_restart_deadline) {
+                board_clear(&s);
+            }
             usleep(12000);
             continue;
         }
@@ -1096,6 +1309,9 @@ int main(void) {
         }
 
         if (s.game_over) {
+            if (s.auto_restart_pending && time(NULL) >= s.auto_restart_deadline) {
+                board_clear(&s);
+            }
             continue;
         }
 
@@ -1108,10 +1324,11 @@ int main(void) {
             continue;
         }
         if (ch >= '1' && ch <= '0' + CF_COLS) {
-            int requested = ch - '1';
+            int display_col = ch - '1';
+            int requested = logical_col_from_display(&s, display_col);
             s.cursor_col = requested;
             if (s.blocked_cols[requested]) {
-                snprintf(s.status, sizeof(s.status), "Column %d is locked this round.", requested + 1);
+                snprintf(s.status, sizeof(s.status), "Column %d is locked this round.", display_col + 1);
             }
             continue;
         }
@@ -1161,6 +1378,7 @@ int main(void) {
                 vm_set_alert(&s, "No active incident.", "You beat the VM");
                 reduce_infection_after_player_win(&s);
                 vm_add_log(&s, "[RESULT] Human victory. Guest stabilized.");
+                arm_auto_restart(&s);
                 continue;
             }
             if (round_is_draw(&s)) {
@@ -1168,6 +1386,7 @@ int main(void) {
                 s.winner = 0;
                 snprintf(s.status, sizeof(s.status), "No playable columns remain.");
                 vm_add_log(&s, "[RESULT] Draw. No incident triggered.");
+                arm_auto_restart(&s);
                 continue;
             }
 
@@ -1178,6 +1397,7 @@ int main(void) {
                 s.winner = 0;
                 snprintf(s.status, sizeof(s.status), "No playable columns remain.");
                 vm_add_log(&s, "[RESULT] Draw after corruption pulse.");
+                arm_auto_restart(&s);
                 continue;
             }
 
@@ -1191,6 +1411,7 @@ int main(void) {
                 s.winner = 0;
                 snprintf(s.status, sizeof(s.status), "No playable columns remain.");
                 vm_add_log(&s, "[RESULT] Draw. Move queue exhausted.");
+                arm_auto_restart(&s);
                 continue;
             }
 
@@ -1204,6 +1425,7 @@ int main(void) {
                 run_punishment_action(&s);
                 show_loss_squiggles(&s);
                 vm_add_log(&s, "[INFO] Incident overlay dismissed by operator.");
+                arm_auto_restart(&s);
                 continue;
             }
             if (round_is_draw(&s)) {
@@ -1211,6 +1433,7 @@ int main(void) {
                 s.winner = 0;
                 snprintf(s.status, sizeof(s.status), "No playable columns remain.");
                 vm_add_log(&s, "[RESULT] Draw. Guest state unchanged.");
+                arm_auto_restart(&s);
                 continue;
             }
 

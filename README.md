@@ -88,6 +88,7 @@ Controls:
 - `Enter` or `Space` to drop
 - `1`-`6` to jump-select columns
 - `q` to quit, `r` to restart after game over
+- After game over, a new round auto-starts after ~5 seconds (you can still press `r` immediately).
 
 Gameplay note:
 
@@ -99,5 +100,6 @@ Gameplay note:
 - A `System Compromised: XX%` meter now drives sabotage intensity. Every AI-win incident increases compromise.
 - At higher compromise levels, punishments can hijack input (`"Virus moved you haha!"`), flip the grid for a turn, and force temporary purple takeover visuals.
 - Greeting adapts with infection state (`Hello Player` -> `Hello Loser` at high compromise).
+- Startup now includes a fake classic desktop sequence: enter your name, then open `SUSPICIOUS.EXE` to launch containment mode.
 
 This modern build path does not overwrite any classic Mac files.
