@@ -96,5 +96,8 @@ Gameplay note:
 - All malware behavior is visual/text simulation only. It does not execute real malware actions or modify your system outside the game process.
 - Incident effects persist across rounds in the current run. Repeated hits of the same incident stack and intensify debuffs in later games.
 - Player wins trigger a recovery sweep that lowers persistent threat so the game can gradually stabilize.
+- A `System Compromised: XX%` meter now drives sabotage intensity. Every AI-win incident increases compromise.
+- At higher compromise levels, punishments can hijack input (`"Virus moved you haha!"`), flip the grid for a turn, and force temporary purple takeover visuals.
+- Greeting adapts with infection state (`Hello Player` -> `Hello Loser` at high compromise).
 
 This modern build path does not overwrite any classic Mac files.

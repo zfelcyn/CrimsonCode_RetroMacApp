@@ -49,15 +49,21 @@ typedef struct {
 
     int incident_stacks[INCIDENT_TYPES];
     int last_incident_code;
+    int total_losses;
+    int total_wins;
+    int compromised_pct;
 
     bool blocked_cols[CF_COLS];
     int blocked_count;
     int active_input_glitch_pct;
+    int active_forced_move_pct;
     int active_control_shift;
     int active_control_direction;
     int active_ai_depth_bonus;
     int active_ai_opening_moves;
     int active_player_piece_corrupt_pct;
+    int active_flip_turns_remaining;
+    int active_purple_turns_remaining;
     char effect_summary[220];
 } AppState;
 
@@ -108,6 +114,40 @@ static int incident_stack(const AppState *s, int code) {
         return 0;
     }
     return s->incident_stacks[code - 1];
+}
+
+static int max_incident_stack(const AppState *s) {
+    int max_stack = 0;
+
+    for (int i = 0; i < INCIDENT_TYPES; ++i) {
+        if (s->incident_stacks[i] > max_stack) {
+            max_stack = s->incident_stacks[i];
+        }
+    }
+
+    return max_stack;
+}
+
+static int compromised_floor(const AppState *s) {
+    int pressure = infection_pressure(s);
+    int max_stack = max_incident_stack(s);
+    int floor_pct = pressure * 4 + max_stack * 5;
+    return clamp_int(floor_pct, 0, 96);
+}
+
+static void sync_compromised_floor(AppState *s) {
+    int floor_pct = compromised_floor(s);
+    if (s->compromised_pct < floor_pct) {
+        s->compromised_pct = floor_pct;
+    }
+    s->compromised_pct = clamp_int(s->compromised_pct, 0, 100);
+}
+
+static const char *player_greeting(const AppState *s) {
+    if (s->compromised_pct >= 60) {
+        return "Hello Loser";
+    }
+    return "Hello Player";
 }
 
 static void nc_init(AppState *s) {
@@ -193,6 +233,28 @@ static bool round_is_draw(const AppState *s) {
     return find_first_playable_col(s) < 0;
 }
 
+static bool is_grid_flipped(const AppState *s) {
+    return s->active_flip_turns_remaining > 0;
+}
+
+static bool is_purple_takeover(const AppState *s) {
+    return s->active_purple_turns_remaining > 0;
+}
+
+static int logical_col_from_display(const AppState *s, int display_col) {
+    if (!is_grid_flipped(s)) {
+        return display_col;
+    }
+    return (CF_COLS - 1) - display_col;
+}
+
+static int apply_flip_to_drop_col(const AppState *s, int col) {
+    if (!is_grid_flipped(s)) {
+        return col;
+    }
+    return (CF_COLS - 1) - col;
+}
+
 static void choose_blocked_columns(AppState *s, int count) {
     int pool[CF_COLS];
 
@@ -242,13 +304,17 @@ static void build_effect_summary(AppState *s) {
 
     snprintf(s->effect_summary, sizeof(s->effect_summary), "Round effects: ");
 
-    if (infection_pressure(s) == 0) {
+    if (infection_pressure(s) == 0 && s->compromised_pct == 0) {
         append_effect_segment(s->effect_summary, sizeof(s->effect_summary), &first, "clean boot");
         return;
     }
 
     if (s->active_input_glitch_pct > 0) {
         snprintf(piece, sizeof(piece), "nVIR jitter %d%%", s->active_input_glitch_pct);
+        append_effect_segment(s->effect_summary, sizeof(s->effect_summary), &first, piece);
+    }
+    if (s->active_forced_move_pct > 0) {
+        snprintf(piece, sizeof(piece), "forced move %d%%", s->active_forced_move_pct);
         append_effect_segment(s->effect_summary, sizeof(s->effect_summary), &first, piece);
     }
     if (s->active_control_shift > 0) {
@@ -271,12 +337,18 @@ static void build_effect_summary(AppState *s) {
         snprintf(piece, sizeof(piece), "666 corruption %d%%", s->active_player_piece_corrupt_pct);
         append_effect_segment(s->effect_summary, sizeof(s->effect_summary), &first, piece);
     }
+    if (s->active_flip_turns_remaining > 0) {
+        append_effect_segment(s->effect_summary, sizeof(s->effect_summary), &first, "grid flip");
+    }
+    if (s->active_purple_turns_remaining > 0) {
+        append_effect_segment(s->effect_summary, sizeof(s->effect_summary), &first, "purple takeover");
+    }
 }
 
 static int ai_search_depth(const AppState *s) {
     int depth = 6 + s->active_ai_depth_bonus;
 
-    if (infection_pressure(s) >= 12) {
+    if (infection_pressure(s) >= 12 || s->compromised_pct >= 70) {
         depth += 1;
     }
 
@@ -291,21 +363,28 @@ static void apply_round_effects(AppState *s) {
     int autostart = incident_stack(s, INCIDENT_AUTOSTART);
     int sevendust = incident_stack(s, INCIDENT_SEVENDUST);
     int pressure = infection_pressure(s);
+    int compromised = s->compromised_pct;
     int blocked_count;
 
     memset(s->blocked_cols, 0, sizeof(s->blocked_cols));
     s->blocked_count = 0;
     s->active_input_glitch_pct = 0;
+    s->active_forced_move_pct = 0;
     s->active_control_shift = 0;
     s->active_control_direction = 1;
     s->active_ai_depth_bonus = 0;
     s->active_ai_opening_moves = 0;
     s->active_player_piece_corrupt_pct = 0;
+    s->active_flip_turns_remaining = 0;
+    s->active_purple_turns_remaining = 0;
 
-    s->active_input_glitch_pct = clamp_int(nvir * 10 + pressure / 4, 0, 55);
+    s->active_input_glitch_pct = clamp_int(nvir * 10 + pressure / 4 + compromised / 8, 0, 72);
+    if (compromised >= 35) {
+        s->active_forced_move_pct = clamp_int((compromised - 30) / 2 + nvir * 6, 0, 68);
+    }
 
     if (mdef > 0) {
-        s->active_control_shift = (mdef >= 3) ? 2 : 1;
+        s->active_control_shift = (mdef >= 3 || compromised >= 80) ? 2 : 1;
         s->active_control_direction = (rand() % 2 == 0) ? 1 : -1;
     }
 
@@ -313,9 +392,12 @@ static void apply_round_effects(AppState *s) {
     if (pressure >= 14 && blocked_count < 2 && wdef > 0) {
         blocked_count += 1;
     }
+    if (compromised >= 88 && blocked_count < 3 && wdef > 0) {
+        blocked_count += 1;
+    }
     choose_blocked_columns(s, blocked_count);
 
-    s->active_ai_depth_bonus = clamp_int(macro, 0, 2);
+    s->active_ai_depth_bonus = clamp_int(macro + (compromised >= 75 ? 1 : 0), 0, 2);
 
     if (autostart >= 1) {
         s->active_ai_opening_moves = 1;
@@ -323,12 +405,29 @@ static void apply_round_effects(AppState *s) {
     if (autostart >= 3) {
         s->active_ai_opening_moves = 2;
     }
+    if (compromised >= 92) {
+        s->active_ai_opening_moves = 2;
+    }
 
-    s->active_player_piece_corrupt_pct = clamp_int(sevendust * 12, 0, 55);
+    s->active_player_piece_corrupt_pct = clamp_int(sevendust * 12 + (compromised >= 72 ? 10 : 0), 0, 66);
+
+    if (compromised >= 50) {
+        int trigger = 14 + compromised / 4 + incident_stack(s, INCIDENT_MDEF) * 5;
+        if ((rand() % 100) < trigger) {
+            s->active_flip_turns_remaining = (compromised >= 85) ? 2 : 1;
+        }
+    }
+    if (compromised >= 58) {
+        int trigger = 10 + compromised / 5 + incident_stack(s, INCIDENT_SEVENDUST) * 5;
+        if ((rand() % 100) < trigger) {
+            s->active_purple_turns_remaining = (compromised >= 85) ? 2 : 1;
+        }
+    }
 
     build_effect_summary(s);
 
     vm_add_log(s, "[THREAT] Persistent infection pressure: %d.", pressure);
+    vm_add_log(s, "[THREAT] System compromised: %d%%.", compromised);
     vm_add_log(s, "[ROUND] %s", s->effect_summary);
 
     if (s->blocked_count > 0) {
@@ -354,10 +453,19 @@ static void board_clear(AppState *s) {
     s->cursor_col = CF_COLS / 2;
     s->game_over = false;
     s->winner = 0;
-    snprintf(s->status, sizeof(s->status), "Your move.");
+    sync_compromised_floor(s);
+    snprintf(s->status, sizeof(s->status), "%s. Your move.", player_greeting(s));
 
     vm_boot(s);
     apply_round_effects(s);
+    vm_add_log(
+        s,
+        "[USER] %s | Record W:%d L:%d | Compromised %d%%",
+        player_greeting(s),
+        s->total_wins,
+        s->total_losses,
+        s->compromised_pct
+    );
 
     if (s->active_ai_opening_moves > 0) {
         int dropped = 0;
@@ -394,10 +502,15 @@ static void board_clear(AppState *s) {
 
 static void reduce_infection_after_player_win(AppState *s) {
     int before = infection_pressure(s);
+    int before_pct = s->compromised_pct;
 
     if (before <= 0) {
+        s->total_wins += 1;
+        s->compromised_pct = clamp_int(s->compromised_pct - 2, 0, 100);
         return;
     }
+
+    s->total_wins += 1;
 
     for (int i = 0; i < INCIDENT_TYPES; ++i) {
         if (s->incident_stacks[i] > 0) {
@@ -412,7 +525,11 @@ static void reduce_infection_after_player_win(AppState *s) {
         }
     }
 
+    s->compromised_pct = clamp_int(s->compromised_pct - 5, 0, 100);
+    sync_compromised_floor(s);
+
     vm_add_log(s, "[AV] Recovery sweep lowered threat %d -> %d.", before, infection_pressure(s));
+    vm_add_log(s, "[AV] Compromised reduced %d%% -> %d%%.", before_pct, s->compromised_pct);
 }
 
 static int remap_drop_col(const AppState *s, int raw_col) {
@@ -441,7 +558,51 @@ static int maybe_glitch_drop_col(AppState *s, int mapped_col) {
 
     beep();
     vm_add_log(s, "[nVIR] Input glitch rerouted %d -> %d.", mapped_col + 1, glitched + 1);
+    snprintf(s->status, sizeof(s->status), "Virus jitter moved your drop %d -> %d.", mapped_col + 1, glitched + 1);
     return glitched;
+}
+
+static int maybe_forced_virus_move(AppState *s, int raw_col, int current_col) {
+    if (s->active_forced_move_pct <= 0) {
+        return current_col;
+    }
+
+    if ((rand() % 100) >= s->active_forced_move_pct) {
+        return current_col;
+    }
+
+    int forced = normalize_col(current_col + 1);
+    int attempts = 0;
+
+    while (attempts < CF_COLS && !is_playable_col(s, forced)) {
+        forced = normalize_col(forced + 1);
+        attempts += 1;
+    }
+
+    if (attempts >= CF_COLS) {
+        return current_col;
+    }
+
+    flash();
+    beep();
+    vm_add_log(s, "[HIJACK] Virus moved drop from %d to %d.", raw_col + 1, forced + 1);
+    snprintf(
+        s->status,
+        sizeof(s->status),
+        "Virus moved you haha! Requested %d -> landed %d.",
+        raw_col + 1,
+        forced + 1
+    );
+    return forced;
+}
+
+static void consume_player_turn_effects(AppState *s) {
+    if (s->active_flip_turns_remaining > 0) {
+        s->active_flip_turns_remaining -= 1;
+    }
+    if (s->active_purple_turns_remaining > 0) {
+        s->active_purple_turns_remaining -= 1;
+    }
 }
 
 static void maybe_corrupt_player_piece(AppState *s) {
@@ -490,9 +651,10 @@ static void maybe_corrupt_player_piece(AppState *s) {
 
 static void move_cursor_to_next_open(AppState *s, int direction) {
     int base = s->cursor_col;
+    int actual_direction = is_grid_flipped(s) ? -direction : direction;
 
     for (int step = 1; step <= CF_COLS; ++step) {
-        int col = normalize_col(base + (step * direction));
+        int col = normalize_col(base + (step * actual_direction));
         if (!s->blocked_cols[col]) {
             s->cursor_col = col;
             return;
@@ -526,8 +688,9 @@ static void draw_vm_console(const AppState *s, int start_y) {
     mvprintw(
         start_y + 1,
         0,
-        "Alert: %s | Stacks N:%d M:%d W:%d O:%d A:%d 6:%d",
+        "Alert: %s | Compromised: %d%% | Stacks N:%d M:%d W:%d O:%d A:%d 6:%d",
         s->vm_current_alert,
+        s->compromised_pct,
         incident_stack(s, INCIDENT_NVIR),
         incident_stack(s, INCIDENT_MDEF),
         incident_stack(s, INCIDENT_WDEF),
@@ -558,7 +721,10 @@ static void draw_vm_console(const AppState *s, int start_y) {
 static void draw_board_ui(const AppState *s) {
     int top = 5;
     int grid_y = top + 3;
-    int vm_y = grid_y + CF_ROWS + 5;
+    int vm_y;
+    int info_row = grid_y + CF_ROWS + 2;
+    bool flipped = is_grid_flipped(s);
+    bool purple = is_purple_takeover(s);
 
     erase();
 
@@ -567,7 +733,7 @@ static void draw_board_ui(const AppState *s) {
     } else {
         attron(A_BOLD);
     }
-    mvprintw(0, 0, "Connect Four Virus :: Fake Mac OS 9 VM");
+    mvprintw(0, 0, "%s :: Connect Four Virus :: Fake Mac OS 9 VM", player_greeting(s));
     if (has_colors()) {
         attroff(A_BOLD | COLOR_PAIR(3));
     } else {
@@ -575,12 +741,19 @@ static void draw_board_ui(const AppState *s) {
     }
 
     mvprintw(1, 0, "LEFT/RIGHT or A/D move | Enter/Space drop | 1-6 quick select | r restart | q quit");
-    mvprintw(2, 0, "You = O   AI = X   First to connect 4 wins.   Threat Level: %d", infection_pressure(s));
+    mvprintw(
+        2,
+        0,
+        "You = O   AI = X   First to connect 4 wins.   Threat Level: %d   System Compromised: %d%%",
+        infection_pressure(s),
+        s->compromised_pct
+    );
     mvprintw(3, 0, "%s", s->effect_summary);
 
     mvprintw(top, 0, "   ");
-    for (int c = 0; c < CF_COLS; ++c) {
-        if (s->blocked_cols[c]) {
+    for (int display_col = 0; display_col < CF_COLS; ++display_col) {
+        int logical_col = logical_col_from_display(s, display_col);
+        if (s->blocked_cols[logical_col]) {
             if (has_colors()) {
                 attron(COLOR_PAIR(5) | A_BOLD);
             }
@@ -589,15 +762,16 @@ static void draw_board_ui(const AppState *s) {
                 attroff(COLOR_PAIR(5) | A_BOLD);
             }
         } else {
-            printw(" %d ", c + 1);
+            printw(" %d ", display_col + 1);
         }
     }
 
     mvprintw(top + 1, 0, "   ");
-    for (int c = 0; c < CF_COLS; ++c) {
-        if (s->blocked_cols[c]) {
+    for (int display_col = 0; display_col < CF_COLS; ++display_col) {
+        int logical_col = logical_col_from_display(s, display_col);
+        if (s->blocked_cols[logical_col]) {
             printw(" x ");
-        } else if (c == s->cursor_col && !s->game_over) {
+        } else if (logical_col == s->cursor_col && !s->game_over) {
             attron(A_REVERSE);
             printw(" ^ ");
             attroff(A_REVERSE);
@@ -608,18 +782,19 @@ static void draw_board_ui(const AppState *s) {
 
     for (int r = 0; r < CF_ROWS; ++r) {
         mvprintw(grid_y + r, 0, "%d |", r);
-        for (int c = 0; c < CF_COLS; ++c) {
-            CfCell cell = s->game.board[r][c];
+        for (int display_col = 0; display_col < CF_COLS; ++display_col) {
+            int logical_col = logical_col_from_display(s, display_col);
+            CfCell cell = s->game.board[r][logical_col];
             char token = '.';
             int pair = 0;
 
             if (cell == CF_HUMAN) {
                 token = 'O';
-                pair = 2;
+                pair = purple ? 5 : 2;
             } else if (cell == CF_AI) {
                 token = 'X';
-                pair = 1;
-            } else if (s->blocked_cols[c]) {
+                pair = purple ? 5 : 1;
+            } else if (s->blocked_cols[logical_col]) {
                 token = '#';
                 pair = 5;
             }
@@ -640,12 +815,28 @@ static void draw_board_ui(const AppState *s) {
     if (s->active_control_shift > 0) {
         int mapped = remap_drop_col(s, s->cursor_col);
         mvprintw(
-            grid_y + CF_ROWS + 2,
+            info_row,
             0,
             "Control remap active: selected %d -> mapped %d",
             s->cursor_col + 1,
             mapped + 1
         );
+        info_row += 1;
+    }
+
+    if (s->active_forced_move_pct > 0) {
+        mvprintw(info_row, 0, "Forced virus move chance: %d%%", s->active_forced_move_pct);
+        info_row += 1;
+    }
+
+    if (flipped) {
+        mvprintw(info_row, 0, "Grid inversion active for %d turn(s).", s->active_flip_turns_remaining);
+        info_row += 1;
+    }
+
+    if (purple) {
+        mvprintw(info_row, 0, "Purple takeover active for %d turn(s).", s->active_purple_turns_remaining);
+        info_row += 1;
     }
 
     if (s->game_over) {
@@ -656,11 +847,11 @@ static void draw_board_ui(const AppState *s) {
         }
 
         if (s->winner == 1) {
-            mvprintw(grid_y + CF_ROWS + 3, 0, "You win. Press r to play again or q to quit.");
+            mvprintw(info_row, 0, "You win. Press r to play again or q to quit.");
         } else if (s->winner == 2) {
-            mvprintw(grid_y + CF_ROWS + 3, 0, "AI wins. Press r to play again or q to quit.");
+            mvprintw(info_row, 0, "AI wins. Press r to play again or q to quit.");
         } else {
-            mvprintw(grid_y + CF_ROWS + 3, 0, "Draw. Press r to play again or q to quit.");
+            mvprintw(info_row, 0, "Draw. Press r to play again or q to quit.");
         }
 
         if (has_colors()) {
@@ -668,6 +859,11 @@ static void draw_board_ui(const AppState *s) {
         } else {
             attroff(A_BOLD);
         }
+    }
+
+    vm_y = info_row + 2;
+    if (vm_y < grid_y + CF_ROWS + 5) {
+        vm_y = grid_y + CF_ROWS + 5;
     }
 
     draw_vm_console(s, vm_y);
@@ -697,6 +893,9 @@ static void run_punishment_action(AppState *s) {
     severity = *stack;
     pressure = infection_pressure(s);
     s->last_incident_code = code;
+    s->total_losses += 1;
+    s->compromised_pct = clamp_int(s->compromised_pct + 6 + severity * 3, 0, 100);
+    sync_compromised_floor(s);
 
     switch (code) {
         case INCIDENT_NVIR:
@@ -783,6 +982,7 @@ static void run_punishment_action(AppState *s) {
 
     vm_add_log(s, "[STACK] %s severity increased to %d.", incident, severity);
     vm_add_log(s, "[THREAT] Global pressure now %d.", pressure);
+    vm_add_log(s, "[THREAT] System compromised now %d%%.", s->compromised_pct);
 
     if (has_colors()) {
         attron(A_BOLD | COLOR_PAIR(1));
@@ -803,7 +1003,8 @@ static void run_punishment_action(AppState *s) {
     mvprintw(y + 5, 4, "%s", l4);
     mvprintw(y + 6, 4, "Stack level: %d (repeats get worse)", severity);
     mvprintw(y + 7, 4, "Threat level: %d", pressure);
-    mvprintw(y + 8, 4, "%s", impact);
+    mvprintw(y + 8, 4, "System compromised: %d%%", s->compromised_pct);
+    mvprintw(y + 9, 4, "%s", impact);
     mvprintw(y + 10, 4, "Press any key to acknowledge incident report.");
 
     flushinp();
@@ -918,8 +1119,20 @@ int main(void) {
         if (ch == ' ' || ch == '\n' || ch == KEY_ENTER) {
             int raw_col = s.cursor_col;
             int mapped_col = remap_drop_col(&s, raw_col);
-            int final_col = maybe_glitch_drop_col(&s, mapped_col);
+            int flipped_col = apply_flip_to_drop_col(&s, mapped_col);
+            int final_col = maybe_glitch_drop_col(&s, flipped_col);
+            int before_forced = final_col;
             int ai_col;
+
+            if (flipped_col != mapped_col) {
+                vm_add_log(&s, "[MIRROR] Grid flip redirected %d -> %d.", mapped_col + 1, flipped_col + 1);
+            }
+
+            final_col = maybe_forced_virus_move(&s, raw_col, final_col);
+            if (final_col != before_forced) {
+                draw_board_ui(&s);
+                usleep(180000);
+            }
 
             if (!is_playable_col(&s, final_col)) {
                 beep();
@@ -939,6 +1152,7 @@ int main(void) {
             } else {
                 vm_add_log(&s, "[MOVE] Human selected %d -> landed %d.", raw_col + 1, final_col + 1);
             }
+            consume_player_turn_effects(&s);
 
             if (cf_has_winner(&s.game, CF_HUMAN)) {
                 s.game_over = true;
