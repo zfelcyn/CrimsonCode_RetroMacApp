@@ -91,6 +91,10 @@ Controls:
 
 Gameplay note:
 
-- When AI wins, a random `1`-`6` "victory tax" prompt appears (text/effects only, no external side effects).
+- The game includes a fake on-screen "Mac OS 9 VM console" with boot/status/event logs.
+- When AI wins, a random `1`-`6` incident simulation runs in the fake VM (nVIR, MDEF/CDEF, WDEF/Zuc, macro viruses, AutoStart, SevenDust/666 themes).
+- All malware behavior is visual/text simulation only. It does not execute real malware actions or modify your system outside the game process.
+- Incident effects persist across rounds in the current run. Repeated hits of the same incident stack and intensify debuffs in later games.
+- Player wins trigger a recovery sweep that lowers persistent threat so the game can gradually stabilize.
 
 This modern build path does not overwrite any classic Mac files.

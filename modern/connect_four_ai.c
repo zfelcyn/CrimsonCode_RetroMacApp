@@ -8,6 +8,29 @@ enum {
     LOSS_SCORE = -100000000
 };
 
+static bool is_col_blocked(const bool blocked_cols[CF_COLS], int col) {
+    return blocked_cols != NULL && blocked_cols[col];
+}
+
+static int collect_valid_moves(
+    const CfGame *game,
+    const bool blocked_cols[CF_COLS],
+    int out_cols[CF_COLS]
+) {
+    int ordered_cols[CF_COLS];
+    int ordered_count = cf_valid_moves(game, ordered_cols);
+    int filtered_count = 0;
+
+    for (int i = 0; i < ordered_count; ++i) {
+        int col = ordered_cols[i];
+        if (!is_col_blocked(blocked_cols, col)) {
+            out_cols[filtered_count++] = col;
+        }
+    }
+
+    return filtered_count;
+}
+
 static int center_distance(int col) {
     int midpoint_scaled = CF_COLS - 1;
     int col_scaled = col * 2;
@@ -114,10 +137,11 @@ static int minimax(
     int beta,
     bool maximizing,
     int ply,
-    int *best_col
+    int *best_col,
+    const bool blocked_cols[CF_COLS]
 ) {
     int valid_cols[CF_COLS];
-    int valid_count = cf_valid_moves(game, valid_cols);
+    int valid_count = collect_valid_moves(game, blocked_cols, valid_cols);
 
     if (cf_has_winner(game, CF_AI)) {
         return WIN_SCORE - ply;
@@ -125,7 +149,7 @@ static int minimax(
     if (cf_has_winner(game, CF_HUMAN)) {
         return LOSS_SCORE + ply;
     }
-    if (depth == 0 || valid_count == 0 || cf_is_draw(game)) {
+    if (depth == 0 || valid_count == 0) {
         return score_position(game);
     }
 
@@ -138,7 +162,7 @@ static int minimax(
             int score;
 
             cf_drop_piece(game, col, CF_AI);
-            score = minimax(game, depth - 1, alpha, beta, false, ply + 1, NULL);
+            score = minimax(game, depth - 1, alpha, beta, false, ply + 1, NULL, blocked_cols);
             cf_undo_piece(game, col);
 
             if (score > best_score || (score == best_score && is_better_tie_break(col, local_best))) {
@@ -168,7 +192,7 @@ static int minimax(
         int score;
 
         cf_drop_piece(game, col, CF_HUMAN);
-        score = minimax(game, depth - 1, alpha, beta, true, ply + 1, NULL);
+        score = minimax(game, depth - 1, alpha, beta, true, ply + 1, NULL, blocked_cols);
         cf_undo_piece(game, col);
 
         if (score < best_score || (score == best_score && is_better_tie_break(col, local_best))) {
@@ -190,9 +214,9 @@ static int minimax(
     return best_score;
 }
 
-int cf_ai_choose_move(CfGame *game, int depth) {
+int cf_ai_choose_move_ex(CfGame *game, int depth, const bool blocked_cols[CF_COLS]) {
     int valid_cols[CF_COLS];
-    int valid_count = cf_valid_moves(game, valid_cols);
+    int valid_count = collect_valid_moves(game, blocked_cols, valid_cols);
     int forced_block = -1;
     int best = -1;
     int empties = CF_ROWS * CF_COLS - game->moves;
@@ -239,10 +263,14 @@ int cf_ai_choose_move(CfGame *game, int depth) {
         search_depth = 8;
     }
 
-    minimax(game, search_depth, INT_MIN, INT_MAX, true, 0, &best);
+    minimax(game, search_depth, INT_MIN, INT_MAX, true, 0, &best, blocked_cols);
 
     if (best < 0) {
         return valid_cols[0];
     }
     return best;
+}
+
+int cf_ai_choose_move(CfGame *game, int depth) {
+    return cf_ai_choose_move_ex(game, depth, NULL);
 }
