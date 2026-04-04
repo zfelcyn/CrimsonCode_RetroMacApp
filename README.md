@@ -1,10 +1,12 @@
 # CrimsonCode Retro Mac App
 
-Classic Macintosh sample app project built with Metrowerks CodeWarrior (Mac OS 9).
+Experimented with and tested a Macintosh sample app project built with Metrowerks CodeWarrior (Mac OS 9).
 
 The source is `SillyBalls.c`, a Color QuickDraw sample that opens a window and draws random colored "Bob" balls.
 
-## Project contents
+Using the SillyBalls.c built an entire game inspired by retro mac viruses and used the SillyBalls source code as part of one of the "Virus Attacks" read below to see how a retro mac app would need to be ran but is not the main delieverable for the Hackathon. The game itself is a connect-four retro terminal game, which as you mess up the game becomes "Corrupted" which is pink # symbols that remove rows or collumns, as well your input may be inversed etc. After rounds minigames such as Bitcoin Mining and Phishing attempts may occur. It uses some of the retro sample CodeWarrior 9 code from the early 2000s and think it is a fun silly game to play.
+
+## Classic Mac Project contents
 
 - `SillyBalls.c`: classic Mac Toolbox C source.
 - `HelloMac9`: CodeWarrior project file.
@@ -40,6 +42,7 @@ Use a local Mac OS 9 environment, then open/run the existing binary or rebuild i
    - Open `HelloMac9` in CodeWarrior and build from source.
 
 Notes:
+
 - Keep `HelloMac9` and `HelloMac9 Data/` in the same folder.
 - If one emulator build does not work well on your host, use another build/runtime for the same project docs.
 
@@ -58,11 +61,11 @@ Notes:
 4. Build.
 5. Run the generated app output from the project folder.
 
-## If you want a native modern macOS app
+## My MacOs game! Originally was developing on the retro mac but due to issues finding documentation on InternetArchive on how to get particular graphics working due to the system not being FreeBSD unit yet like most Macs today it became really annoying in the time allotted.
 
 This code uses classic Toolbox/QuickDraw APIs, so a native run on current macOS requires a port (Cocoa, SDL2, or another modern graphics layer).
 
-## Included modern-mac game (non-invasive)
+## Here is the main delievery game!
 
 To keep the original CodeWarrior project untouched, this repo includes a separate terminal game:
 
@@ -104,6 +107,8 @@ Gameplay note:
 - Occasionally between rounds, a random intermission mini-game appears.
 - `Bitcoin Miner`: mash space to mine enough hashes before timeout.
 - `Phishing Detector`: classify messages as phishing vs safe.
+- `Evil AI Negotiator`: your credentials are threatened; type responses to stop a leak.
+- Hidden break phrase for the Evil AI mini-game: `retro checksum amnesty`.
 - Outcomes can slightly reduce or increase compromise.
 
 This modern build path does not overwrite any classic Mac files.

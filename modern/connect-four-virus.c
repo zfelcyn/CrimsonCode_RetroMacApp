@@ -1,5 +1,6 @@
 #include <ncurses.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -699,8 +700,176 @@ static void run_phishing_minigame(AppState *s) {
     usleep(1200000);
 }
 
+static void to_lower_copy(const char *src, char *dst, size_t cap) {
+    size_t i = 0;
+    if (cap == 0) {
+        return;
+    }
+
+    while (src[i] != '\0' && i + 1 < cap) {
+        dst[i] = (char)tolower((unsigned char)src[i]);
+        i += 1;
+    }
+    dst[i] = '\0';
+}
+
+static int response_persuasion_score(const char *text) {
+    static const char *kWords[] = {
+        "please", "mercy", "sorry", "deal", "patch", "audit", "compliance",
+        "trace", "rollback", "encrypt", "legal", "decoy", "safe", "protect"
+    };
+
+    char lower[256];
+    int score = 0;
+
+    to_lower_copy(text, lower, sizeof(lower));
+
+    for (size_t i = 0; i < sizeof(kWords) / sizeof(kWords[0]); ++i) {
+        if (strstr(lower, kWords[i]) != NULL) {
+            score += 1;
+        }
+    }
+
+    return score;
+}
+
+static bool is_evil_ai_break_phrase(const char *text) {
+    char lower[256];
+    to_lower_copy(text, lower, sizeof(lower));
+
+    return strstr(lower, "retro") != NULL &&
+           strstr(lower, "checksum") != NULL &&
+           strstr(lower, "amnesty") != NULL;
+}
+
+static void run_evil_ai_minigame(AppState *s) {
+    static const char *kTaunts[] = {
+        "EVIL AI: I have your banking profile and will dump it in 30 seconds.",
+        "EVIL AI: Convince me or your credentials go public.",
+        "EVIL AI: Your account routing number is queued for release."
+    };
+
+    int leak_risk = clamp_int(35 + s->compromised_pct / 2, 30, 95);
+    int trust = 0;
+    bool broken = false;
+    char input[192];
+    int prompt_index = rand() % (int)(sizeof(kTaunts) / sizeof(kTaunts[0]));
+
+    flushinp();
+    nodelay(stdscr, false);
+    keypad(stdscr, true);
+    echo();
+    curs_set(1);
+
+    for (int turn = 0; turn < 3; ++turn) {
+        int fill = clamp_int((100 - leak_risk) * 24 / 100, 0, 24);
+        char bar[25];
+        int score;
+        size_t len;
+
+        for (int i = 0; i < 24; ++i) {
+            bar[i] = (i < fill) ? '#' : '.';
+        }
+        bar[24] = '\0';
+
+        erase();
+        if (has_colors()) {
+            attron(A_BOLD | COLOR_PAIR(1));
+        } else {
+            attron(A_BOLD);
+        }
+        mvprintw(1, 2, "INTERMISSION MINI-GAME: EVIL AI NEGOTIATOR");
+        if (has_colors()) {
+            attroff(A_BOLD | COLOR_PAIR(1));
+        } else {
+            attroff(A_BOLD);
+        }
+
+        mvprintw(3, 2, "%s", kTaunts[prompt_index]);
+        mvprintw(5, 2, "Leak risk: %d%%  [%-24s]", leak_risk, bar);
+        mvprintw(6, 2, "Trust points: %d", trust);
+        mvprintw(8, 2, "Type a message to convince the AI to cancel the leak:");
+        mvprintw(9, 2, "> ");
+        clrtoeol();
+        move(9, 4);
+        getnstr(input, (int)sizeof(input) - 1);
+
+        len = strlen(input);
+        while (len > 0 && (input[len - 1] == ' ' || input[len - 1] == '\t')) {
+            input[len - 1] = '\0';
+            len -= 1;
+        }
+
+        if (is_evil_ai_break_phrase(input)) {
+            broken = true;
+            break;
+        }
+
+        score = response_persuasion_score(input);
+        if (score >= 4) {
+            trust += 2;
+            leak_risk -= 20;
+        } else if (score >= 2) {
+            trust += 1;
+            leak_risk -= 11;
+        } else if (score == 1) {
+            leak_risk -= 4;
+        } else {
+            leak_risk += 9;
+        }
+
+        if (strstr(input, "!") != NULL || strstr(input, "threat") != NULL) {
+            leak_risk += 4;
+        }
+
+        leak_risk = clamp_int(leak_risk, 0, 100);
+
+        erase();
+        mvprintw(4, 2, "Transmission analyzed. Leak risk now %d%%.", leak_risk);
+        if (turn == 1) {
+            mvprintw(6, 2, "Rumor: a legacy bug responds to three words.");
+        }
+        refresh();
+        usleep(850000);
+
+        prompt_index = (prompt_index + 1) % (int)(sizeof(kTaunts) / sizeof(kTaunts[0]));
+    }
+
+    noecho();
+    curs_set(0);
+    nodelay(stdscr, true);
+
+    erase();
+    if (broken) {
+        int before = s->compromised_pct;
+        s->compromised_pct = clamp_int(s->compromised_pct - 8, 0, 100);
+        sync_compromised_floor(s);
+        mvprintw(4, 2, "You triggered a legacy parser bug. EVIL AI crashed.");
+        mvprintw(6, 2, "Credential leak cancelled.");
+        vm_add_log(s, "[MINIGAME] EVIL AI parser bug triggered. %d%% -> %d%%.", before, s->compromised_pct);
+        flash();
+    } else if (leak_risk <= 34 || trust >= 3) {
+        int before = s->compromised_pct;
+        s->compromised_pct = clamp_int(s->compromised_pct - 5, 0, 100);
+        sync_compromised_floor(s);
+        mvprintw(4, 2, "EVIL AI accepted your argument and withheld the dump.");
+        vm_add_log(s, "[MINIGAME] EVIL AI negotiated down. %d%% -> %d%%.", before, s->compromised_pct);
+    } else {
+        int before = s->compromised_pct;
+        s->compromised_pct = clamp_int(s->compromised_pct + 5, 0, 100);
+        mvprintw(4, 2, "Negotiation failed. Leak packet escaped containment.");
+        vm_add_log(s, "[MINIGAME] EVIL AI negotiation failed. %d%% -> %d%%.", before, s->compromised_pct);
+        beep();
+    }
+
+    mvprintw(8, 2, "Intermission complete.");
+    refresh();
+    usleep(1300000);
+}
+
 static void maybe_run_intermission_minigame(AppState *s) {
     int chance = clamp_int(25 + s->compromised_pct / 2, 20, 78);
+    int mode;
 
     if ((rand() % 100) >= chance) {
         return;
@@ -708,10 +877,17 @@ static void maybe_run_intermission_minigame(AppState *s) {
 
     vm_add_log(s, "[INTERMISSION] Random mini-game launched.");
 
-    if (rand() % 2 == 0) {
+    mode = rand() % 3;
+    if (s->compromised_pct >= 55 && (rand() % 100) < 45) {
+        mode = 2;
+    }
+
+    if (mode == 0) {
         run_mining_minigame(s);
-    } else {
+    } else if (mode == 1) {
         run_phishing_minigame(s);
+    } else {
+        run_evil_ai_minigame(s);
     }
 
     flushinp();
